@@ -269,7 +269,6 @@ jobs:
           
           # Update vCluster context
           echo "VCLUSTER_CONTEXT=$CURRENT_CONTEXT" >> $GITHUB_ENV
-
       - name: Install Testkube Runner in vCluster
         run: |
           echo "=== Installing Testkube Runner in vCluster ==="
