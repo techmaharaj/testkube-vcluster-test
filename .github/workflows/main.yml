@@ -377,7 +377,7 @@ jobs:
 
       - name: Upload Test Artifacts
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: vcluster-test-results-pr-${{ env.PR_NUMBER }}
           path: /tmp/test-artifacts/
