@@ -282,29 +282,49 @@ jobs:
         run: |
           echo "=== Installing Testkube Runner in vCluster ==="
           
-          # Ensure we're in vCluster context
-          kubectl config use-context $VCLUSTER_CONTEXT
+          # Ensure we're connected to vCluster
+          CURRENT_CONTEXT=$(kubectl config current-context)
+          echo "Current context: $CURRENT_CONTEXT"
           
-          # Create and install runner agent in vCluster
-          RUNNER_NAME="vcluster-runner-${{ github.run_id }}"
+          # Verify we're in vCluster (should have fewer namespaces)
+          NAMESPACE_COUNT=$(kubectl get namespaces --no-headers | wc -l)
+          echo "Namespace count: $NAMESPACE_COUNT"
           
-          testkube install runner $RUNNER_NAME \
+          if [ $NAMESPACE_COUNT -gt 10 ]; then
+            echo "⚠️ WARNING: High namespace count detected. Might not be connected to vCluster"
+            echo "Attempting to reconnect to vCluster..."
+            vcluster connect testkube-vcluster-$PR_NUMBER --namespace demo-$PR_NUMBER &
+            VCLUSTER_PID=$!
+            sleep 20
+          fi
+          
+          # Create unique runner name for this PR
+          RUNNER_NAME="vcluster-runner-pr-$PR_NUMBER"
+          echo "RUNNER_NAME=$RUNNER_NAME" >> $GITHUB_ENV
+          echo "Creating runner: $RUNNER_NAME"
+          
+          # Install runner in vCluster with proper flags
+          testkube install runner "$RUNNER_NAME" \
             --create \
             --floating \
-            --labels="environment=vcluster,pr=PR-$PR_NUMBER,cluster=demo-$PR_NUMBER" \
+            --label environment=vcluster \
+            --label pr_number="$PR_NUMBER" \
+            --label purpose=ephemeral_testing \
             --namespace testkube
           
-          echo "RUNNER_NAME=$RUNNER_NAME" >> $GITHUB_ENV
-          
-          # Wait for runner to be ready
-          echo "Waiting for runner to be ready..."
+          echo "=== Verifying Runner Installation ==="
+          # Wait a bit for runner to be ready
           sleep 30
           
-          # Verify runner installation
-          kubectl get pods -n testkube
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=testkube-runner -n testkube --timeout=300s
+          # Check if runner is available
+          testkube get runner "$RUNNER_NAME" || {
+            echo "❌ Runner not found. Checking available runners:"
+            testkube get runners
+            exit 1
+          }
           
-          echo "✅ Testkube Runner installed: $RUNNER_NAME"
+          echo "✅ Testkube runner installed successfully in vCluster"
+
 
       - name: Verify Testkube Runner Registration
         run: |
