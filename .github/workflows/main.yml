@@ -298,16 +298,8 @@ jobs:
           echo "RUNNER_NAME=$RUNNER_NAME" >> $GITHUB_ENV
           echo "Creating runner: $RUNNER_NAME"
           
-          # Get current environment info to avoid interactive prompt
-          echo "=== Current Testkube Context ==="
-          testkube config
-          
-          # Install runner in vCluster
-          # Get the current environment from testkube config to avoid interactive prompt
-          echo "=== Getting current Testkube environment ==="
-          ENVIRONMENT_NAME=$(testkube config | grep "Environment" | awk '{print $3}')
-          echo "Using environment: $ENVIRONMENT_NAME"
-          
+          # Install runner in vCluster - hardcode the known environment
+          echo "Installing runner with environment: testkube-gke"
           testkube install runner "$RUNNER_NAME" \
             --create \
             --floating \
@@ -315,7 +307,7 @@ jobs:
             --label pr_number="$PR_NUMBER" \
             --label purpose=ephemeral_testing \
             --namespace testkube \
-            --env "$ENVIRONMENT_NAME"
+            --env testkube-gke
           
           echo "=== Verifying Runner Installation ==="
           # Wait a bit for runner to be ready
@@ -325,11 +317,13 @@ jobs:
           testkube get runner "$RUNNER_NAME" || {
             echo "❌ Runner not found. Checking available runners:"
             testkube get runners
+            echo "Checking agents:"
+            testkube get agents
             exit 1
           }
           
           echo "✅ Testkube runner installed successfully in vCluster"
-
+          
       - name: Verify Testkube Runner Registration
         run: |
           echo "=== Verifying Testkube Runner Registration ==="
