@@ -324,23 +324,47 @@ jobs:
           
           echo "✅ Testkube runner installed successfully in vCluster"
           
+      
       - name: Verify Testkube Runner Registration
         run: |
           echo "=== Verifying Testkube Runner Registration ==="
           
-          # Check if runner is registered with Testkube Cloud
-          testkube get runners
-          
-          # Wait for runner to register with cloud (may take a moment)
+          # Wait a bit for runner to fully register
           sleep 30
           
-          # Verify our vCluster runner is available
-          if testkube get runners | grep -q "$RUNNER_NAME"; then
-            echo "✅ vCluster runner successfully registered with Testkube Cloud"
+          # Check if runner exists - use a different approach
+          echo "Checking for runner: $RUNNER_NAME"
+          
+          # Method 1: Check if runner appears in agents list
+          if testkube get agents | grep -q "$RUNNER_NAME"; then
+            echo "✅ Runner found in agents list"
+            RUNNER_FOUND=true
           else
-            echo "❌ vCluster runner not found in Testkube Cloud"
-            echo "Available runners:"
-            testkube get runners
+            echo "⚠️ Runner not found in agents list"
+            RUNNER_FOUND=false
+          fi
+          
+          # Method 2: Try to get runner details (ignore exit code)
+          echo "=== Runner Details ==="
+          testkube get runner "$RUNNER_NAME" || echo "Runner details command returned error, but this might be normal"
+          
+          # Method 3: Check if runner pod is running in vCluster
+          echo "=== Runner Pod Status ==="
+          kubectl get pods -n testkube | grep runner || echo "No runner pods found"
+          
+          # Method 4: List all agents for verification
+          echo "=== All Available Agents ==="
+          testkube get agents
+          
+          # Final verification - if runner appears in any output, it's working
+          if testkube get agents | grep -q "$RUNNER_NAME"; then
+            echo "✅ Testkube runner verified successfully!"
+            echo "Runner Name: $RUNNER_NAME"
+            echo "Environment: testkube-gke"
+            echo "Labels: environment=vcluster, pr_number=$PR_NUMBER, purpose=ephemeral_testing"
+          else
+            echo "❌ Runner verification failed"
+            echo "This might be a timing issue. Runner may still be initializing."
             exit 1
           fi
 
