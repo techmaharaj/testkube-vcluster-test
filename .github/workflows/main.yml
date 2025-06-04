@@ -312,9 +312,6 @@ jobs:
           echo "=== Verifying Runner Installation ==="
           # Wait a bit for runner to be ready
           sleep 30
-
-          kubectl config current-context
-          kubectl get pods -n testkube  
           
           # Check if runner is available
           testkube get runner "$RUNNER_NAME" || {
@@ -352,6 +349,12 @@ jobs:
             # Show runner details
             echo "=== Runner Details ==="
             testkube get agents | grep "$RUNNER_NAME"
+
+            # Show runner status
+            echo "=== Runner Status - Current Context ==="
+            CURRENT_CONTEXT=$(kubectl config current-context)
+            echo "Current context: $CURRENT_CONTEXT"
+            kubectl get ns
             
             # Check runner pod status
             echo "=== Runner Pod Status ==="
