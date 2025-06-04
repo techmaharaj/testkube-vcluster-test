@@ -245,7 +245,7 @@ jobs:
           
           # Wait for vCluster to be fully ready
           echo "=== Waiting for vCluster to be ready ==="
-          kubectl wait --for=condition=ready pod -l app=vcluster -n demo-$PR_NUMBER --timeout=300s
+          kubectl wait --for=condition=ready pod/testkube-vcluster-$PR_NUMBER-0 -n demo-$PR_NUMBER --timeout=300s
           
           # Connect to vCluster
           echo "=== Connecting to vCluster ==="
