@@ -290,27 +290,29 @@ jobs:
           NAMESPACE_COUNT=$(kubectl get namespaces --no-headers | wc -l)
           echo "Namespace count: $NAMESPACE_COUNT"
           
-          if [ $NAMESPACE_COUNT -gt 10 ]; then
-            echo "⚠️ WARNING: High namespace count detected. Might not be connected to vCluster"
-            echo "Attempting to reconnect to vCluster..."
-            vcluster connect testkube-vcluster-$PR_NUMBER --namespace demo-$PR_NUMBER &
-            VCLUSTER_PID=$!
-            sleep 20
-          fi
-          
           # Create unique runner name for this PR
           RUNNER_NAME="vcluster-runner-pr-$PR_NUMBER"
           echo "RUNNER_NAME=$RUNNER_NAME" >> $GITHUB_ENV
           echo "Creating runner: $RUNNER_NAME"
           
-          # Install runner in vCluster with proper flags
+          # Get current environment info to avoid interactive prompt
+          echo "=== Current Testkube Context ==="
+          testkube config
+          
+          # Install runner in vCluster
+          # Get the current environment from testkube config to avoid interactive prompt
+          echo "=== Getting current Testkube environment ==="
+          ENVIRONMENT_NAME=$(testkube config | grep "Environment" | awk '{print $3}')
+          echo "Using environment: $ENVIRONMENT_NAME"
+          
           testkube install runner "$RUNNER_NAME" \
             --create \
             --floating \
             --label environment=vcluster \
             --label pr_number="$PR_NUMBER" \
             --label purpose=ephemeral_testing \
-            --namespace testkube
+            --namespace testkube \
+            --env "$ENVIRONMENT_NAME"
           
           echo "=== Verifying Runner Installation ==="
           # Wait a bit for runner to be ready
@@ -324,7 +326,6 @@ jobs:
           }
           
           echo "✅ Testkube runner installed successfully in vCluster"
-
 
       - name: Verify Testkube Runner Registration
         run: |
