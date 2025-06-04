@@ -237,6 +237,9 @@ jobs:
       - name: Connect to vCluster for Testkube Setup  
         run: |
           echo "=== Connecting to vCluster ==="
+
+          kubectl config use-context $HOST_CONTEXT
+          echo "Current context: $(kubectl config current-context)"
           
           # Clean up existing connections
           kill $VCLUSTER_PID 2>/dev/null || true
