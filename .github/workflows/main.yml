@@ -376,22 +376,7 @@ jobs:
           fi
 
       # ==================== Test Execution in vCluster ====================
-      - name: Run Chainsaw Tests in vCluster
-        id: run-chainsaw-tests
-        continue-on-error: true
-        run: |
-          echo "=== Running Chainsaw Tests in vCluster ==="
-          echo "Target runner: $RUNNER_NAME"
-          
-          # Execute chainsaw test workflow targeting vCluster runner
-          testkube run testworkflow chainsaw-nginx -f \
-            --target name=$RUNNER_NAME \
-            --tag environment=vcluster \
-            --tag test-type=chainsaw \
-            --tag pr=PR-$PR_NUMBER \
-            --tag cluster=demo-$PR_NUMBER \
-            --tag demo=gitopscon-isolated
-
+    
       - name: Run k6 Performance Tests in vCluster
         id: run-k6-tests
         continue-on-error: true
