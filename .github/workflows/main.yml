@@ -338,6 +338,27 @@ jobs:
           
           # Clean up verification connection
           kill $VERIFY_PID 2>/dev/null || true
+
+      - name: Debug nginx Service Location  
+        run: |
+          echo "=== Debugging nginx service location ==="
+          
+          # Connect to vCluster to check where nginx actually is
+          vcluster connect testkube-vcluster-$PR_NUMBER --namespace demo-$PR_NUMBER &
+          sleep 20
+          
+          echo "=== All services in all namespaces ==="
+          kubectl get svc -A | grep nginx || echo "No nginx services found"
+          
+          echo "=== Services in nginx namespace ==="
+          kubectl get svc -n nginx || echo "No services in nginx namespace"
+          
+          echo "=== Services in default namespace ==="  
+          kubectl get svc -n default || echo "No services in default namespace"
+          
+          echo "=== All pods ==="
+          kubectl get pods -A | grep nginx || echo "No nginx pods found"
+      
       
       # ==================== Testkube in vCluster Module ====================
       - name: Setup Testkube CLI
