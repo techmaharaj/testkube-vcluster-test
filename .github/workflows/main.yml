@@ -144,19 +144,46 @@ jobs:
           kubectl get nodes
           kubectl get namespaces
           
-          # IMPORTANT: Get the vCluster context name WHILE connected
+          # CRITICAL: Get vCluster context and verify it's different from host
           VCLUSTER_CONTEXT=$(kubectl config current-context)
           echo "vCluster context name: $VCLUSTER_CONTEXT"
+          echo "Host context: $HOST_CONTEXT"
+          
+          if [ "$VCLUSTER_CONTEXT" = "$HOST_CONTEXT" ]; then
+            echo "❌ ERROR: Still connected to host context, not vCluster!"
+            exit 1
+          fi
+          
           echo "VCLUSTER_CONTEXT=$VCLUSTER_CONTEXT" >> $GITHUB_ENV
           
-          # Save vCluster kubeconfig for ArgoCD
+          # CRITICAL: Save vCluster kubeconfig while connected and verify contents
           echo "=== Saving vCluster kubeconfig ==="
           kubectl config view --raw > /tmp/vcluster-config.yaml
+          
+          # Verify the saved config contains vCluster endpoint, not host cluster
+          echo "=== Verifying saved kubeconfig contains vCluster endpoint ==="
+          SAVED_SERVER=$(grep "server:" /tmp/vcluster-config.yaml | head -1 | awk '{print $2}')
+          echo "Saved server endpoint: $SAVED_SERVER"
+          
+          # Get the actual vCluster LoadBalancer IP for comparison  
+          EXPECTED_VCLUSTER_IP=$(kubectl get svc testkube-vcluster-$PR_NUMBER -n demo-$PR_NUMBER --context $HOST_CONTEXT -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Expected vCluster IP: $EXPECTED_VCLUSTER_IP"
+          
+          if [[ "$SAVED_SERVER" == *"$EXPECTED_VCLUSTER_IP"* ]]; then
+            echo "✅ Kubeconfig correctly contains vCluster endpoint"
+          else
+            echo "❌ ERROR: Kubeconfig contains wrong endpoint!"
+            echo "Expected to contain: $EXPECTED_VCLUSTER_IP"
+            echo "Actually contains: $SAVED_SERVER"
+            echo "Full kubeconfig server section:"
+            grep -A 2 -B 2 "server:" /tmp/vcluster-config.yaml
+            exit 1
+          fi
           
           # Switch back to host context for ArgoCD operations
           kubectl config use-context $HOST_CONTEXT
           
-          echo "✅ vCluster kubeconfig prepared for ArgoCD"
+          echo "✅ vCluster kubeconfig prepared and verified for ArgoCD"
 
       - name: Configure ArgoCD to Deploy to vCluster
         run: |
@@ -193,7 +220,13 @@ jobs:
           # Login to ArgoCD
           argocd login "$ARGOCD_SERVER" --username admin --password "$ARGOCD_PASSWORD" --insecure
           
-          # Add vCluster to ArgoCD
+          # CRITICAL: Verify kubeconfig before adding cluster
+          echo "=== Verifying kubeconfig before adding to ArgoCD ==="
+          echo "Kubeconfig server endpoints:"
+          grep "server:" /tmp/vcluster-config.yaml
+          
+          # Add vCluster to ArgoCD with verification
+          echo "=== Adding vCluster to ArgoCD ==="
           argocd cluster add "$VCLUSTER_CONTEXT" \
             --kubeconfig /tmp/vcluster-config.yaml \
             --name "vcluster-pr-$PR_NUMBER" \
@@ -201,17 +234,35 @@ jobs:
           
           sleep 10
           
-          # Get vCluster server URL
+          # CRITICAL: Verify the cluster was added with correct endpoint
+          echo "=== Verifying cluster addition ==="
+          argocd cluster list
+          
+          # Get vCluster server URL and verify it's NOT the host cluster
           VCLUSTER_SERVER=$(argocd cluster list -o server | grep -v "^https://kubernetes.default.svc$" | grep -v "^NAME$" | head -1)
+          HOST_CLUSTER_IP=$(kubectl get nodes -o wide --no-headers | head -1 | awk '{print $7}')
+          
+          echo "=== Verification Results ==="
+          echo "Host cluster internal IP: $HOST_CLUSTER_IP"
+          echo "ArgoCD target server: $VCLUSTER_SERVER"
+          
           if [ -z "$VCLUSTER_SERVER" ]; then
             echo "❌ Failed to get vCluster server URL"
             argocd cluster list
             exit 1
           fi
           
+          # Verify we're NOT targeting the host cluster
+          if [[ "$VCLUSTER_SERVER" == *"$HOST_CLUSTER_IP"* ]]; then
+            echo "❌ ERROR: ArgoCD is targeting HOST cluster instead of vCluster!"
+            echo "This will cause nginx to deploy to host cluster instead of vCluster"
+            exit 1
+          fi
+          
+          echo "✅ ArgoCD correctly configured to target vCluster"
           echo "VCLUSTER_SERVER=$VCLUSTER_SERVER" >> $GITHUB_ENV
           
-          # Create ArgoCD application
+          # Create ArgoCD application targeting vCluster
           argocd app create nginx-vcluster-pr-$PR_NUMBER \
             --repo "https://github.com/techmaharaj/Testkube-vCluster-ArgoCD" \
             --path k8s \
@@ -226,6 +277,49 @@ jobs:
           
           echo "✅ ArgoCD to vCluster configuration completed"
 
+      - name: Verify nginx Deployment in vCluster
+        run: |
+          echo "=== Verifying nginx deployment in vCluster ==="
+          
+          # Connect to vCluster to check nginx deployment
+          vcluster connect testkube-vcluster-$PR_NUMBER --namespace demo-$PR_NUMBER &
+          VERIFY_PID=$!
+          sleep 20
+          
+          echo "=== Checking nginx namespace in vCluster ==="
+          kubectl get namespaces | grep nginx || {
+            echo "❌ nginx namespace not found in vCluster"
+            kubectl get namespaces
+            exit 1
+          }
+          
+          echo "=== Checking nginx deployment status ==="
+          kubectl get all -n nginx
+          
+          # Wait for nginx deployment to be ready
+          echo "=== Waiting for nginx deployment to be ready ==="
+          kubectl wait --for=condition=available deployment/nginx-deployment -n nginx --timeout=300s || {
+            echo "❌ nginx deployment failed to become ready"
+            kubectl describe deployment nginx-deployment -n nginx
+            kubectl get events -n nginx --sort-by='.lastTimestamp'
+            exit 1
+          }
+          
+          # Test nginx connectivity from within vCluster
+          echo "=== Testing nginx connectivity ==="
+          kubectl run test-connectivity --image=busybox --rm -it --restart=Never --command -- \
+            wget -qO- --timeout=10 http://nginx-service.nginx.svc.cluster.local || {
+            echo "❌ nginx connectivity test failed"
+            kubectl get svc -n nginx
+            kubectl get pods -n nginx
+            exit 1
+          }
+          
+          echo "✅ nginx successfully deployed and accessible in vCluster"
+          
+          # Clean up verification connection
+          kill $VERIFY_PID 2>/dev/null || true
+      
       # ==================== Testkube in vCluster Module ====================
       - name: Setup Testkube CLI
         uses: kubeshop/setup-testkube@v1
