@@ -283,7 +283,7 @@ jobs:
           
           # Create ArgoCD application targeting vCluster
           argocd app create nginx-vcluster-pr-$PR_NUMBER \
-            --repo "https://github.com/techmaharaj/Testkube-vCluster-ArgoCD" \
+            --repo "https://github.com/techmaharaj/testkube-vcluster-test" \
             --path k8s \
             --dest-server "$VCLUSTER_SERVER" \
             --dest-namespace nginx \
