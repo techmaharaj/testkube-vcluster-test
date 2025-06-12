@@ -387,6 +387,7 @@ jobs:
           # Execute k6 test workflow targeting vCluster runner
           testkube run testworkflow k6-sample -f \
             --target name=$RUNNER_NAME \
+            --tag runner=$RUNNER_NAME \
             --tag environment=vcluster \
             --tag test-type=k6 \
             --tag pr=PR-$PR_NUMBER \
