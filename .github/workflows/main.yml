@@ -135,7 +135,26 @@ jobs:
           vcluster connect testkube-vcluster-$PR_NUMBER --namespace demo-$PR_NUMBER &
           VCLUSTER_PID=$!
           echo "VCLUSTER_PID=$VCLUSTER_PID" >> $GITHUB_ENV
-          sleep 30
+          
+          # Wait for context switch to happen (check every 5 seconds for up to 60 seconds)
+          echo "=== Waiting for vCluster context switch ==="
+          for i in {1..12}; do
+            sleep 5
+            CURRENT_CONTEXT=$(kubectl config current-context)
+            echo "Attempt $i: Current context: $CURRENT_CONTEXT"
+            
+            if [ "$CURRENT_CONTEXT" != "$HOST_CONTEXT" ]; then
+              echo "✅ Context successfully switched to vCluster!"
+              break
+            fi
+            
+            if [ $i -eq 12 ]; then
+              echo "❌ ERROR: Context never switched to vCluster after 60 seconds"
+              echo "Host context: $HOST_CONTEXT"
+              echo "Current context: $CURRENT_CONTEXT"
+              exit 1
+            fi
+          done
 
           echo "=== Creating nginx namespace in vCluster ==="
           kubectl create namespace nginx --dry-run=client -o yaml | kubectl apply -f -
@@ -144,15 +163,10 @@ jobs:
           kubectl get nodes
           kubectl get namespaces
           
-          # CRITICAL: Get vCluster context and verify it's different from host
+          # Get vCluster context (now we know it's switched)
           VCLUSTER_CONTEXT=$(kubectl config current-context)
           echo "vCluster context name: $VCLUSTER_CONTEXT"
           echo "Host context: $HOST_CONTEXT"
-          
-          if [ "$VCLUSTER_CONTEXT" = "$HOST_CONTEXT" ]; then
-            echo "❌ ERROR: Still connected to host context, not vCluster!"
-            exit 1
-          fi
           
           echo "VCLUSTER_CONTEXT=$VCLUSTER_CONTEXT" >> $GITHUB_ENV
           
@@ -184,7 +198,7 @@ jobs:
           kubectl config use-context $HOST_CONTEXT
           
           echo "✅ vCluster kubeconfig prepared and verified for ArgoCD"
-
+      
       - name: Configure ArgoCD to Deploy to vCluster
         run: |
           echo "=== Configuring ArgoCD to Deploy to vCluster ==="
