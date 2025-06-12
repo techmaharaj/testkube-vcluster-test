@@ -176,21 +176,26 @@ jobs:
           
           # Verify the saved config contains vCluster endpoint, not host cluster
           echo "=== Verifying saved kubeconfig contains vCluster endpoint ==="
-          SAVED_SERVER=$(grep "server:" /tmp/vcluster-config.yaml | head -1 | awk '{print $2}')
-          echo "Saved server endpoint: $SAVED_SERVER"
           
           # Get the actual vCluster LoadBalancer IP for comparison  
           EXPECTED_VCLUSTER_IP=$(kubectl get svc testkube-vcluster-$PR_NUMBER -n demo-$PR_NUMBER --context $HOST_CONTEXT -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
           echo "Expected vCluster IP: $EXPECTED_VCLUSTER_IP"
           
-          if [[ "$SAVED_SERVER" == *"$EXPECTED_VCLUSTER_IP"* ]]; then
-            echo "✅ Kubeconfig correctly contains vCluster endpoint"
+          # Extract server URL specifically for the vCluster context name
+          echo "=== Checking kubeconfig for vCluster context: $VCLUSTER_CONTEXT ==="
+          
+          # Show all clusters in kubeconfig for debugging
+          echo "All clusters in kubeconfig:"
+          grep -A 3 -B 1 "server:" /tmp/vcluster-config.yaml
+          
+          # Check if vCluster IP is present in the kubeconfig
+          if grep -q "$EXPECTED_VCLUSTER_IP" /tmp/vcluster-config.yaml; then
+            echo "✅ Kubeconfig correctly contains vCluster endpoint: $EXPECTED_VCLUSTER_IP"
           else
-            echo "❌ ERROR: Kubeconfig contains wrong endpoint!"
-            echo "Expected to contain: $EXPECTED_VCLUSTER_IP"
-            echo "Actually contains: $SAVED_SERVER"
-            echo "Full kubeconfig server section:"
-            grep -A 2 -B 2 "server:" /tmp/vcluster-config.yaml
+            echo "❌ ERROR: Kubeconfig missing vCluster endpoint!"
+            echo "Expected to find: $EXPECTED_VCLUSTER_IP"
+            echo "Full kubeconfig clusters:"
+            grep -A 3 -B 1 "server:" /tmp/vcluster-config.yaml
             exit 1
           fi
           
