@@ -324,22 +324,6 @@ jobs:
           
           echo "✅ Testkube runner installed successfully in vCluster"
           
-      
-      - name: Verify Testkube Runner Registration
-        run: |
-          echo "=== Verifying Testkube Runner Registration ==="
-          
-          # Fix: Re-construct the runner name since environment variable is getting corrupted
-          EXPECTED_RUNNER_NAME="vcluster-runner-pr-$PR_NUMBER"
-          echo "Expected runner name: $EXPECTED_RUNNER_NAME"
-          echo "Current RUNNER_NAME variable: $RUNNER_NAME"
-          
-          # Use the correct name
-          RUNNER_NAME="$EXPECTED_RUNNER_NAME"
-          
-          # Wait a bit for runner to fully register
-          sleep 10
-
       # ==================== Test Execution in vCluster ====================
     
       - name: Run k6 Performance Tests in vCluster
@@ -347,52 +331,57 @@ jobs:
         continue-on-error: true
         run: |
 
-          echo "=== Checking for runner: $RUNNER_NAME ==="
+            # Runner Name
+            RUNNER_NAME="vcluster-runner-pr-$PR_NUMBER"
           
-          # Check if runner exists in agents list
-          if testkube get agents | grep -q "$RUNNER_NAME"; then
-            echo "✅ Runner found in agents list!"
-            
-            # Show runner details
-            echo "=== Runner Details ==="
-            testkube get agents | grep "$RUNNER_NAME"
-
-            # Show runner status
-            echo "=== Runner Status - Current Context ==="
-            CURRENT_CONTEXT=$(kubectl config current-context)
-            echo "Current context: $CURRENT_CONTEXT"
-            kubectl get ns
-            
-            # Check runner pod status
-            echo "=== Runner Pod Status ==="
-            kubectl get pods -n testkube | grep runner
-            
-            echo "✅ Testkube runner verified successfully!"
-            echo "Runner Name: $RUNNER_NAME"
-            echo "Environment: testkube-gke" 
-            echo "Status: Ready and operational"
-            
-            # Update the environment variable for next steps
-            echo "RUNNER_NAME=$RUNNER_NAME" >> $GITHUB_ENV
-            
-          else
-            echo "❌ Runner not found with name: $RUNNER_NAME"
-            echo "Available runners:"
-            testkube get agents
-            exit 1
-          fi
-          echo "=== Running k6 Performance Tests in vCluster ==="
-          echo "Target runner: $RUNNER_NAME"
+            echo "=== Checking for runner: $RUNNER_NAME ==="
           
-          # Execute k6 test workflow targeting vCluster runner
-          testkube run testworkflow k6-sample -f \
-            --target name=$RUNNER_NAME \
-            --tag runner=$RUNNER_NAME \
-            --tag environment=vcluster \
-            --tag test-type=k6 \
-            --tag pr=PR-$PR_NUMBER \
-            --tag cluster=demo-$PR_NUMBER \
-            --tag demo=gitopscon-isolated
+            # Check if runner exists in agents list
+            if testkube get agents | grep -q "$RUNNER_NAME"; then
+              echo "✅ Runner found in agents list!"
+              
+              # Show runner details
+              echo "=== Runner Details ==="
+              testkube get agents | grep "$RUNNER_NAME"
+  
+              # Show runner status
+              echo "=== Runner Status - Current Context ==="
+              CURRENT_CONTEXT=$(kubectl config current-context)
+              echo "Current context: $CURRENT_CONTEXT"
+              kubectl get ns
+              
+              # Check runner pod status
+              echo "=== Runner Pod Status ==="
+              kubectl get pods -n testkube | grep runner
+              
+              echo "✅ Testkube runner verified successfully!"
+              echo "Runner Name: $RUNNER_NAME"
+              echo "Environment: testkube-gke" 
+              echo "Status: Ready and operational"
+              
+              # Update the environment variable for next steps
+              echo "RUNNER_NAME=$RUNNER_NAME" >> $GITHUB_ENV
+              
+            else
+              echo "❌ Runner not found with name: $RUNNER_NAME"
+              echo "Available runners:"
+              testkube get agents
+              exit 1
+            fi
+            echo "=== Running k6 Performance Tests in vCluster ==="
+          
+            # Wait a bit for runner to fully register
+            sleep 10
+  
+            # Execute k6 test workflow targeting vCluster runner
+            testkube run testworkflow k6-sample -f \
+              --target name=$RUNNER_NAME \
+              --tag runner=$RUNNER_NAME \
+              --tag environment=vcluster \
+              --tag test-type=k6 \
+              --tag pr=PR-$PR_NUMBER \
+              --tag cluster=demo-$PR_NUMBER \
+              --tag demo=gitopscon-isolated
 
       # ==================== Log Collection and Artifacts ====================
       - name: Collect Test Results and Logs
