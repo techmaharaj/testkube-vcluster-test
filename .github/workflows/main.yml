@@ -339,7 +339,14 @@ jobs:
           
           # Wait a bit for runner to fully register
           sleep 10
-          
+
+      # ==================== Test Execution in vCluster ====================
+    
+      - name: Run k6 Performance Tests in vCluster
+        id: run-k6-tests
+        continue-on-error: true
+        run: |
+
           echo "=== Checking for runner: $RUNNER_NAME ==="
           
           # Check if runner exists in agents list
@@ -374,13 +381,6 @@ jobs:
             testkube get agents
             exit 1
           fi
-
-      # ==================== Test Execution in vCluster ====================
-    
-      - name: Run k6 Performance Tests in vCluster
-        id: run-k6-tests
-        continue-on-error: true
-        run: |
           echo "=== Running k6 Performance Tests in vCluster ==="
           echo "Target runner: $RUNNER_NAME"
           
