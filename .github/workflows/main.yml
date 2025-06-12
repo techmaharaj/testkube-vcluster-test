@@ -390,7 +390,7 @@ jobs:
             --tag environment=vcluster \
             --tag test-type=k6 \
             --tag pr=PR-$PR_NUMBER \
-            --tag cluster=demo-$PR_NUMBER I am running a few minutes late; my previous meeting is running over.
+            --tag cluster=demo-$PR_NUMBER \
             --tag demo=gitopscon-isolated
 
       # ==================== Log Collection and Artifacts ====================
