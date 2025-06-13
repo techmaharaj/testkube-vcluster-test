@@ -1,287 +1,93 @@
-name: Testkube on vCluster with ArgoCD - Complete Isolation
+name: Testkube vCluster Integration Tests
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - main 
+    branches: [main]
 
 env:
   PR_NUMBER: ${{ github.event.number || github.run_id }}
+  VCLUSTER_NAME: testkube-vcluster-${{ github.event.number || github.run_id }}
+  NAMESPACE: demo-${{ github.event.number || github.run_id }}
+  RUNNER_NAME: vcluster-runner-pr-${{ github.event.number || github.run_id }}
 
 jobs:
-  run-test:
+  vcluster-tests:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-     
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Install gke-gcloud-auth-plugin
+      - name: Setup GKE Access
         run: |
-          gcloud components install gke-gcloud-auth-plugin
-
-      - name: Get GKE credentials
-        run: |
+          echo '${{ secrets.GCP_CREDENTIALS }}' | base64 -d > /tmp/gcp-key.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp-key.json
           gcloud container clusters get-credentials ${{ secrets.GKE_CLUSTER_NAME }} \
-            --zone ${{ secrets.GKE_ZONE }} \
-            --project ${{ secrets.GCP_PROJECT_ID }}
+            --zone ${{ secrets.GKE_ZONE }} --project ${{ secrets.GCP_PROJECT_ID }}
+          echo "HOST_CONTEXT=$(kubectl config current-context)" >> $GITHUB_ENV
 
-      - name: Install CLI tools
+      - name: Install Tools
         run: |
-          # Install vCluster CLI
+          # vCluster CLI
           curl -sSL https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64 -o vcluster
-          chmod +x vcluster
-          sudo mv vcluster /usr/local/bin
+          chmod +x vcluster && sudo mv vcluster /usr/local/bin
           
-          # Install ArgoCD CLI
-          curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          chmod +x argocd-linux-amd64
-          sudo mv argocd-linux-amd64 /usr/local/bin/argocd
+          # ArgoCD CLI  
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd && sudo mv argocd /usr/local/bin
 
-      - name: Verify existing installations
+      - name: Setup ArgoCD
         run: |
-          echo "=== Host Cluster Info ==="
-          kubectl cluster-info
-          kubectl get nodes
-          
-          echo "=== Available Namespaces ==="
-          kubectl get namespaces
-          
-          echo "=== Checking ArgoCD ==="
-          kubectl get pods -n argocd || echo "ArgoCD namespace not found"
+          kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+          kubectl wait --for=condition=available --timeout=600s deployment/argocd-server -n argocd
 
-      - name: Pre-flight Cleanup
+      - name: Create vCluster Environment
         run: |
-          echo "=== Pre-flight Cleanup for Ephemeral Demo ==="
+          # Cleanup any existing resources
+          kubectl delete namespace $NAMESPACE --ignore-not-found=true
           
-          # Clean up any potential leftovers from previous demo runs
-          kubectl get namespaces | grep "demo-" | awk '{print $1}' | xargs -r kubectl delete namespace --ignore-not-found=true || true
-          kubectl get applications -n argocd 2>/dev/null | grep "nginx-vcluster-pr-" | awk '{print $1}' | xargs -r kubectl delete application -n argocd --ignore-not-found=true || true
+          # Create vCluster
+          kubectl create namespace $NAMESPACE
+          vcluster create $VCLUSTER_NAME --namespace $NAMESPACE --connect=false --expose
           
-          # Clean up any leftover vClusters
-          vcluster list | grep "testkube-vcluster-" | awk '{print $1, $2}' | while read name namespace; do
-            echo "Cleaning up leftover vCluster: $name in $namespace"
-            vcluster delete "$name" --namespace "$namespace" || true
-          done
-          
-          echo "=== Pre-flight cleanup completed ==="
+          # Wait for readiness
+          kubectl wait --for=condition=ready pod/$VCLUSTER_NAME-0 -n $NAMESPACE --timeout=300s
 
-      - name: Install or Verify ArgoCD
+      - name: Configure ArgoCD for vCluster
         run: |
-          echo "=== Checking ArgoCD Installation ==="
-          
-          if kubectl get namespace argocd >/dev/null 2>&1; then
-            echo "ArgoCD namespace exists, checking pods..."
-            ARGOCD_PODS=$(kubectl get pods -n argocd --no-headers 2>/dev/null | wc -l)
-            if [ "$ARGOCD_PODS" -gt 0 ]; then
-              echo "ArgoCD pods found, checking if they're ready..."
-              kubectl get pods -n argocd
-              kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd || echo "ArgoCD server not ready yet"
-            else
-              echo "ArgoCD namespace exists but no pods found, installing..."
-              kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-              kubectl wait --for=condition=available --timeout=600s deployment/argocd-server -n argocd
-            fi
-          else
-            echo "ArgoCD not found, installing..."
-            kubectl create namespace argocd
-            kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-            kubectl wait --for=condition=available --timeout=600s deployment/argocd-server -n argocd
-          fi
-          
-          echo "=== ArgoCD Status ==="
-          kubectl get pods -n argocd
-          kubectl get svc -n argocd
-
-      # ==================== vCluster Module ====================
-      - name: Create vCluster
-        run: |
-          echo "=== Creating vCluster for PR $PR_NUMBER ==="
-          
-          # Save host context
-          HOST_CONTEXT=$(kubectl config current-context)
-          echo "HOST_CONTEXT=$HOST_CONTEXT" >> $GITHUB_ENV
-          echo "Host cluster context: $HOST_CONTEXT"
-          
-          # Create namespace
-          kubectl create namespace demo-$PR_NUMBER --dry-run=client -o yaml | kubectl apply -f -
-          
-          # Create vCluster with proper configuration
-          vcluster create testkube-vcluster-$PR_NUMBER \
-            --namespace demo-$PR_NUMBER \
-            --connect=false \
-            --expose
-          
-          # Wait for vCluster to be ready
-          echo "Waiting for vCluster to be ready..."
+          # Connect to vCluster and save config
+          vcluster connect $VCLUSTER_NAME --namespace $NAMESPACE &
+          VCLUSTER_PID=$!
           sleep 30
           
-          echo "=== vCluster created successfully ==="
-          kubectl get all -n demo-$PR_NUMBER
-          kubectl get svc -n demo-$PR_NUMBER
-
-      - name: Setup vCluster for ArgoCD Integration
-        run: |
-          echo "=== Setting up vCluster connectivity for ArgoCD ==="
+          # Create nginx namespace in vCluster
+          kubectl create namespace nginx
           
-          # Connect to vCluster temporarily for ArgoCD setup
-          vcluster connect testkube-vcluster-$PR_NUMBER --namespace demo-$PR_NUMBER &
-          VCLUSTER_PID=$!
-          echo "VCLUSTER_PID=$VCLUSTER_PID" >> $GITHUB_ENV
-          
-          # Wait for context switch to happen (check every 5 seconds for up to 60 seconds)
-          echo "=== Waiting for vCluster context switch ==="
-          for i in {1..12}; do
-            sleep 5
-            CURRENT_CONTEXT=$(kubectl config current-context)
-            echo "Attempt $i: Current context: $CURRENT_CONTEXT"
-            
-            if [ "$CURRENT_CONTEXT" != "$HOST_CONTEXT" ]; then
-              echo "✅ Context successfully switched to vCluster!"
-              break
-            fi
-            
-            if [ $i -eq 12 ]; then
-              echo "❌ ERROR: Context never switched to vCluster after 60 seconds"
-              echo "Host context: $HOST_CONTEXT"
-              echo "Current context: $CURRENT_CONTEXT"
-              exit 1
-            fi
-          done
-
-          echo "=== Creating nginx namespace in vCluster ==="
-          kubectl create namespace nginx --dry-run=client -o yaml | kubectl apply -f -
-          
-          echo "=== Verifying vCluster connection ==="
-          kubectl get nodes
-          kubectl get namespaces
-          
-          # Get vCluster context (now we know it's switched)
-          VCLUSTER_CONTEXT=$(kubectl config current-context)
-          echo "vCluster context name: $VCLUSTER_CONTEXT"
-          echo "Host context: $HOST_CONTEXT"
-          
-          echo "VCLUSTER_CONTEXT=$VCLUSTER_CONTEXT" >> $GITHUB_ENV
-          
-          # CRITICAL: Save vCluster kubeconfig while connected and verify contents
-          echo "=== Saving vCluster kubeconfig ==="
+          # Save vCluster kubeconfig
           kubectl config view --raw > /tmp/vcluster-config.yaml
+          VCLUSTER_CONTEXT=$(kubectl config current-context)
           
-          # Verify the saved config contains vCluster endpoint, not host cluster
-          echo "=== Verifying saved kubeconfig contains vCluster endpoint ==="
-          
-          # Get the actual vCluster LoadBalancer IP for comparison  
-          EXPECTED_VCLUSTER_IP=$(kubectl get svc testkube-vcluster-$PR_NUMBER -n demo-$PR_NUMBER --context $HOST_CONTEXT -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-          echo "Expected vCluster IP: $EXPECTED_VCLUSTER_IP"
-          
-          # Extract server URL specifically for the vCluster context name
-          echo "=== Checking kubeconfig for vCluster context: $VCLUSTER_CONTEXT ==="
-          
-          # Show all clusters in kubeconfig for debugging
-          echo "All clusters in kubeconfig:"
-          grep -A 3 -B 1 "server:" /tmp/vcluster-config.yaml
-          
-          # Check if vCluster IP is present in the kubeconfig
-          if grep -q "$EXPECTED_VCLUSTER_IP" /tmp/vcluster-config.yaml; then
-            echo "✅ Kubeconfig correctly contains vCluster endpoint: $EXPECTED_VCLUSTER_IP"
-          else
-            echo "❌ ERROR: Kubeconfig missing vCluster endpoint!"
-            echo "Expected to find: $EXPECTED_VCLUSTER_IP"
-            echo "Full kubeconfig clusters:"
-            grep -A 3 -B 1 "server:" /tmp/vcluster-config.yaml
-            exit 1
-          fi
-          
-          # Switch back to host context for ArgoCD operations
+          # Return to host cluster
           kubectl config use-context $HOST_CONTEXT
+          kill $VCLUSTER_PID
           
-          echo "✅ vCluster kubeconfig prepared and verified for ArgoCD"
-      
-      - name: Configure ArgoCD to Deploy to vCluster
-        run: |
-          echo "=== Configuring ArgoCD to Deploy to vCluster ==="
-          
-          # Ensure we're on host cluster for ArgoCD operations
-          kubectl config use-context $HOST_CONTEXT
-          echo "Current context: $(kubectl config current-context)"
-          
-          # Get ArgoCD credentials
+          # Setup ArgoCD
           ARGOCD_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
-          if [ -z "$ARGOCD_PASSWORD" ]; then
-            echo "❌ Failed to get ArgoCD password"
-            exit 1
-          fi
           
-          # Get ArgoCD server endpoint
-          ARGOCD_SERVER=$(kubectl get svc argocd-server -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+          # Port-forward for ArgoCD access
+          kubectl port-forward svc/argocd-server -n argocd 8080:443 &
+          ARGOCD_PID=$!
+          sleep 20
           
-          if [ -z "$ARGOCD_SERVER" ]; then
-            echo "No external IP found, setting up port-forward..."
-            pkill -f "kubectl port-forward.*argocd-server" || true
-            sleep 5
-            kubectl port-forward svc/argocd-server -n argocd 8080:443 &
-            ARGOCD_PORT_FORWARD_PID=$!
-            echo "ARGOCD_PORT_FORWARD_PID=$ARGOCD_PORT_FORWARD_PID" >> $GITHUB_ENV
-            sleep 20
-            ARGOCD_SERVER="localhost:8080"
-          fi
+          # Login and add cluster
+          argocd login localhost:8080 --username admin --password "$ARGOCD_PASSWORD" --insecure
+          argocd cluster add "$VCLUSTER_CONTEXT" --kubeconfig /tmp/vcluster-config.yaml \
+            --name "vcluster-pr-$PR_NUMBER" --yes
           
-          echo "ARGOCD_SERVER=$ARGOCD_SERVER" >> $GITHUB_ENV
-          echo "ARGOCD_PASSWORD=$ARGOCD_PASSWORD" >> $GITHUB_ENV
+          # Get vCluster server URL
+          VCLUSTER_SERVER=$(argocd cluster list -o server | grep -v "kubernetes.default.svc" | grep -v "NAME" | head -1)
           
-          # Login to ArgoCD
-          argocd login "$ARGOCD_SERVER" --username admin --password "$ARGOCD_PASSWORD" --insecure
-          
-          # CRITICAL: Verify kubeconfig before adding cluster
-          echo "=== Verifying kubeconfig before adding to ArgoCD ==="
-          echo "Kubeconfig server endpoints:"
-          grep "server:" /tmp/vcluster-config.yaml
-          
-          # Add vCluster to ArgoCD with verification
-          echo "=== Adding vCluster to ArgoCD ==="
-          argocd cluster add "$VCLUSTER_CONTEXT" \
-            --kubeconfig /tmp/vcluster-config.yaml \
-            --name "vcluster-pr-$PR_NUMBER" \
-            --yes
-          
-          sleep 10
-          
-          # CRITICAL: Verify the cluster was added with correct endpoint
-          echo "=== Verifying cluster addition ==="
-          argocd cluster list
-          
-          # Get vCluster server URL and verify it's NOT the host cluster
-          VCLUSTER_SERVER=$(argocd cluster list -o server | grep -v "^https://kubernetes.default.svc$" | grep -v "^NAME$" | head -1)
-          HOST_CLUSTER_IP=$(kubectl get nodes -o wide --no-headers | head -1 | awk '{print $7}')
-          
-          echo "=== Verification Results ==="
-          echo "Host cluster internal IP: $HOST_CLUSTER_IP"
-          echo "ArgoCD target server: $VCLUSTER_SERVER"
-          
-          if [ -z "$VCLUSTER_SERVER" ]; then
-            echo "❌ Failed to get vCluster server URL"
-            argocd cluster list
-            exit 1
-          fi
-          
-          # Verify we're NOT targeting the host cluster
-          if [[ "$VCLUSTER_SERVER" == *"$HOST_CLUSTER_IP"* ]]; then
-            echo "❌ ERROR: ArgoCD is targeting HOST cluster instead of vCluster!"
-            echo "This will cause nginx to deploy to host cluster instead of vCluster"
-            exit 1
-          fi
-          
-          echo "✅ ArgoCD correctly configured to target vCluster"
-          echo "VCLUSTER_SERVER=$VCLUSTER_SERVER" >> $GITHUB_ENV
-          
-          # Create ArgoCD application targeting vCluster
+          # Deploy nginx application
           argocd app create nginx-vcluster-pr-$PR_NUMBER \
             --repo "https://github.com/techmaharaj/testkube-vcluster-test" \
             --path k8s \
@@ -291,386 +97,127 @@ jobs:
             --sync-policy automated \
             --upsert
           
-          # Sync the application
-          argocd app sync nginx-vcluster-pr-$PR_NUMBER --force --timeout 300
+          # Sync application
+          argocd app sync nginx-vcluster-pr-$PR_NUMBER --timeout 300
           
-          echo "✅ ArgoCD to vCluster configuration completed"
+          # Cleanup port-forward
+          kill $ARGOCD_PID
+          
+          echo "VCLUSTER_CONTEXT=$VCLUSTER_CONTEXT" >> $GITHUB_ENV
+          echo "ARGOCD_PASSWORD=$ARGOCD_PASSWORD" >> $GITHUB_ENV
 
-      - name: Verify nginx Deployment in vCluster
-        run: |
-          echo "=== Verifying nginx deployment in vCluster ==="
-          
-          # Connect to vCluster to check nginx deployment
-          vcluster connect testkube-vcluster-$PR_NUMBER --namespace demo-$PR_NUMBER &
-          VERIFY_PID=$!
-          sleep 20
-          
-          echo "=== Checking nginx namespace in vCluster ==="
-          kubectl get namespaces | grep nginx || {
-            echo "❌ nginx namespace not found in vCluster"
-            kubectl get namespaces
-            exit 1
-          }
-          
-          echo "=== Checking nginx deployment status ==="
-          kubectl get all -n nginx
-          
-          # Wait for nginx deployment to be ready
-          echo "=== Waiting for nginx deployment to be ready ==="
-          kubectl wait --for=condition=available deployment/nginx-deployment -n nginx --timeout=300s || {
-            echo "❌ nginx deployment failed to become ready"
-            kubectl describe deployment nginx-deployment -n nginx
-            kubectl get events -n nginx --sort-by='.lastTimestamp'
-            exit 1
-          }
-          
-          # Test nginx connectivity from within vCluster
-          echo "=== Testing nginx connectivity ==="
-          kubectl run test-connectivity --image=busybox --rm -it --restart=Never --command -- \
-            wget -qO- --timeout=10 http://nginx-service.nginx.svc.cluster.local || {
-            echo "❌ nginx connectivity test failed"
-            kubectl get svc -n nginx
-            kubectl get pods -n nginx
-            exit 1
-          }
-          
-          echo "✅ nginx successfully deployed and accessible in vCluster"
-          
-          # Clean up verification connection
-          kill $VERIFY_PID 2>/dev/null || true
-
-      - name: Debug nginx Service Location  
-        run: |
-          echo "=== Debugging nginx service location ==="
-          
-          # Connect to vCluster to check where nginx actually is
-          vcluster connect testkube-vcluster-$PR_NUMBER --namespace demo-$PR_NUMBER &
-          sleep 20
-          
-          echo "=== All services in all namespaces ==="
-          kubectl get svc -A | grep nginx || echo "No nginx services found"
-          
-          echo "=== Services in nginx namespace ==="
-          kubectl get svc -n nginx || echo "No services in nginx namespace"
-          
-          echo "=== Services in default namespace ==="  
-          kubectl get svc -n default || echo "No services in default namespace"
-          
-          echo "=== All pods ==="
-          kubectl get pods -A | grep nginx || echo "No nginx pods found"
-      
-      
-      # ==================== Testkube in vCluster Module ====================
-      - name: Setup Testkube CLI
+      - name: Setup Testkube
         uses: kubeshop/setup-testkube@v1
         with:
           organization: ${{ secrets.TESTKUBE_ORG_ID }}
           environment: ${{ secrets.TESTKUBE_ENV_ID }}
           token: ${{ secrets.TESTKUBE_API_TOKEN }}
 
-      - name: Connect to vCluster for Testkube Setup  
+      - name: Install Testkube Runner
         run: |
-          echo "=== Connecting to vCluster ==="
-
-          kubectl config use-context $HOST_CONTEXT
-          echo "Current context: $(kubectl config current-context)"
-          
-          # Clean up existing connections
-          kill $VCLUSTER_PID 2>/dev/null || true
-          pkill -f "vcluster connect" || true
-          sleep 5
-          
-          # Wait for vCluster to be fully ready
-          echo "=== Waiting for vCluster to be ready ==="
-          kubectl wait --for=condition=ready pod/testkube-vcluster-$PR_NUMBER-0 -n demo-$PR_NUMBER --timeout=300s
-          
           # Connect to vCluster
-          echo "=== Connecting to vCluster ==="
-          vcluster connect testkube-vcluster-$PR_NUMBER --namespace demo-$PR_NUMBER &
+          vcluster connect $VCLUSTER_NAME --namespace $NAMESPACE &
           VCLUSTER_PID=$!
-          echo "VCLUSTER_PID=$VCLUSTER_PID" >> $GITHUB_ENV
           sleep 30
           
-          # Get current context and proceed regardless of namespace count
-          CURRENT_CONTEXT=$(kubectl config current-context)
-          echo "Current context: $CURRENT_CONTEXT"
-          echo "VCLUSTER_CONTEXT=$CURRENT_CONTEXT" >> $GITHUB_ENV
-          
-          # Show what we're working with but don't fail
-          echo "Available namespaces:"
-          kubectl get namespaces
-          
-          NAMESPACE_COUNT=$(kubectl get namespaces --no-headers | wc -l)
-          echo "Namespace count: $NAMESPACE_COUNT"
-          
-          if [ $NAMESPACE_COUNT -gt 10 ]; then
-            echo "⚠️ WARNING: High namespace count ($NAMESPACE_COUNT) detected."
-            echo "This might indicate connection to host cluster, but continuing..."
-          else
-            echo "✅ Successfully connected to vCluster (Namespace count: $NAMESPACE_COUNT)"
-          fi
-          
-          # Ensure testkube namespace exists regardless
+          # Create testkube namespace and install runner
           kubectl create namespace testkube --dry-run=client -o yaml | kubectl apply -f -
           
-          echo "✅ Proceeding with context: $CURRENT_CONTEXT"
-      
-      - name: Install Testkube Runner in vCluster
-        run: |
-          echo "=== Installing Testkube Runner in vCluster ==="
-          
-          # Ensure we're connected to vCluster
-          CURRENT_CONTEXT=$(kubectl config current-context)
-          echo "Current context: $CURRENT_CONTEXT"
-          
-          # Verify we're in vCluster (should have fewer namespaces)
-          NAMESPACE_COUNT=$(kubectl get namespaces --no-headers | wc -l)
-          echo "Namespace count: $NAMESPACE_COUNT"
-          
-          # Create unique runner name for this PR
-          RUNNER_NAME="vcluster-runner-pr-$PR_NUMBER"
-          echo "RUNNER_NAME=$RUNNER_NAME" >> $GITHUB_ENV
-          echo "Creating runner: $RUNNER_NAME"
-          
-          # Install runner in vCluster - hardcode the known environment
-          echo "Installing runner with environment: testkube-gke"
-          testkube install runner "$RUNNER_NAME" \
-            --create \
-            --floating \
+          testkube install runner $RUNNER_NAME \
+            --create --floating \
             --label environment=vcluster \
             --label pr_number="$PR_NUMBER" \
-            --label purpose=ephemeral_testing \
             --namespace testkube \
             --env testkube-gke
           
-          echo "=== Verifying Runner Installation ==="
-          # Wait a bit for runner to be ready
-          sleep 30
-          
-          # Check if runner is available
-          testkube get runner "$RUNNER_NAME" || {
-            echo "❌ Runner not found. Checking available runners:"
-            testkube get runners
-            echo "Checking agents:"
-            testkube get agents
-            exit 1
-          }
-          
-          echo "✅ Testkube runner installed successfully in vCluster"
-          
-      # ==================== Test Execution in vCluster ====================
-    
-      - name: Run k6 Performance Tests in vCluster
-        id: run-k6-tests
-        continue-on-error: true
-        run: |
-
-            # Runner Name
-            RUNNER_NAME="vcluster-runner-pr-$PR_NUMBER"
-          
-            echo "=== Checking for runner: $RUNNER_NAME ==="
-          
-            # Check if runner exists in agents list
-            if testkube get agents | grep -q "$RUNNER_NAME"; then
-              echo "✅ Runner found in agents list!"
-              
-              # Show runner details
-              echo "=== Runner Details ==="
-              testkube get agents | grep "$RUNNER_NAME"
-  
-              # Show runner status
-              echo "=== Runner Status - Current Context ==="
-              CURRENT_CONTEXT=$(kubectl config current-context)
-              echo "Current context: $CURRENT_CONTEXT"
-              kubectl get ns
-              
-              # Check runner pod status
-              echo "=== Runner Pod Status ==="
-              kubectl get pods -n testkube | grep runner
-              
-              echo "✅ Testkube runner verified successfully!"
-              echo "Runner Name: $RUNNER_NAME"
-              echo "Environment: testkube-gke" 
-              echo "Status: Ready and operational"
-              
-              # Update the environment variable for next steps
-              echo "RUNNER_NAME=$RUNNER_NAME" >> $GITHUB_ENV
-              
-            else
-              echo "❌ Runner not found with name: $RUNNER_NAME"
-              echo "Available runners:"
-              testkube get agents
-              exit 1
-            fi
-            echo "=== Running k6 Performance Tests in vCluster ==="
-          
-            # Wait a bit for runner to fully register
-            sleep 10
-  
-            # Execute k6 test workflow targeting vCluster runner
-            testkube run testworkflow k6-sample -f \
-              --target name=$RUNNER_NAME \
-              --tag runner=$RUNNER_NAME \
-              --tag environment=vcluster \
-              --tag test-type=k6 \
-              --tag pr=PR-$PR_NUMBER \
-              --tag cluster=demo-$PR_NUMBER \
-              --tag demo=gitopscon-isolated
-
-            # Get the current runner name and extract service account pattern
-            echo "=== Setting up dynamic service account ==="
-            RUNNER_SA="exec-sa-testkube-$RUNNER_NAME"
-            echo "Current runner service account: $RUNNER_SA"
-            
-            cat > /tmp/chainsaw-rbac-dynamic.yaml << EOF
-            apiVersion: rbac.authorization.k8s.io/v1
+          # Setup RBAC for chainsaw tests
+          RUNNER_SA="exec-sa-testkube-$RUNNER_NAME"
+          cat > /tmp/chainsaw-rbac.yaml << EOF
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: testkube-chainsaw-access
+          rules:
+          - apiGroups: ["", "apps"]
+            resources: ["*"]
+            verbs: ["get", "list", "watch"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: testkube-chainsaw-access
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
             kind: ClusterRole
-            metadata:
-              name: testkube-chainsaw-access
-            rules:
-            - apiGroups: [""]
-              resources: ["namespaces", "pods", "services", "configmaps", "secrets"]
-              verbs: ["get", "list", "watch"]
-            - apiGroups: ["apps"] 
-              resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
-              verbs: ["get", "list", "watch"]
-            - apiGroups: ["argoproj.io"]
-              resources: ["applications"]
-              verbs: ["get", "list", "watch"]
-            ---
-            apiVersion: rbac.authorization.k8s.io/v1
-            kind: ClusterRoleBinding
-            metadata:
-              name: testkube-chainsaw-access
-            roleRef:
-              apiGroup: rbac.authorization.k8s.io
-              kind: ClusterRole
-              name: testkube-chainsaw-access
-            subjects:
-            - kind: ServiceAccount
-              name: $RUNNER_SA
-              namespace: testkube
-            EOF
-            
-            # Apply the RBAC
-            kubectl apply -f /tmp/chainsaw-rbac-dynamic.yaml
-            
-            echo "✅ Dynamic RBAC applied for current runner:"
-            echo "   - Service Account: $RUNNER_SA"
-            echo "   - Permissions: Basic read access to resources chainsaw needs"
-            echo "   - Should work for this specific PR"
+            name: testkube-chainsaw-access
+          subjects:
+          - kind: ServiceAccount
+            name: $RUNNER_SA
+            namespace: testkube
+          EOF
+          kubectl apply -f /tmp/chainsaw-rbac.yaml
+          
+          # Wait for runner readiness
+          sleep 30
+          testkube get runner $RUNNER_NAME
+          
+          echo "VCLUSTER_PID=$VCLUSTER_PID" >> $GITHUB_ENV
 
-            echo "=== Running Chainsaw Tests in vCluster with Testkube ==="
-            echo "=== Running test with target runner: $RUNNER_NAME ==="
-  
-            # Run the test workflow to validate the Nginx deployment using chainsaw
-            testkube run testworkflow chainsaw-nginx -f \
-              --target name=$RUNNER_NAME \
-              --tag runner=$RUNNER_NAME \
-              --tag environment=vcluster \
-              --tag test-type=chainsaw \
-              --tag pr=PR-$PR_NUMBER \
-              --tag cluster=demo-$PR_NUMBER \
-              --tag demo=gitopscon-isolated
+      - name: Run Tests
+        run: |
+          # Test tags for this run
+          TEST_TAGS="--tag runner=$RUNNER_NAME --tag environment=vcluster --tag pr=PR-$PR_NUMBER"
+          
+          echo "=== Running k6 Performance Tests ==="
+          testkube run testworkflow k6-sample -f \
+            --target name=$RUNNER_NAME \
+            $TEST_TAGS \
+            --tag test-type=k6
+          
+          echo "=== Running Chainsaw Integration Tests ==="
+          testkube run testworkflow chainsaw-nginx -f \
+            --target name=$RUNNER_NAME \
+            $TEST_TAGS \
+            --tag test-type=chainsaw
 
-
-      # ==================== Log Collection and Artifacts ====================
-      - name: Collect Test Results and Logs
+      - name: Collect Test Artifacts
         if: always()
         run: |
-          echo "=== Collecting Test Results and Logs ==="
+          mkdir -p /tmp/artifacts
           
-          # Create artifacts directory
-          mkdir -p /tmp/test-artifacts
+          # Test results
+          testkube get testworkflowexecutions --limit 5 > /tmp/artifacts/test-results.txt
           
-          # Get recent test executions for our runner
-          echo "Recent test executions:" > /tmp/test-artifacts/test-summary.txt
-          testkube get testworkflowexecutions --limit 10 >> /tmp/test-artifacts/test-summary.txt
-          
-          # Collect vCluster pod logs
-          echo "Collecting vCluster pod logs..."
-          kubectl config use-context $VCLUSTER_CONTEXT || true
-          kubectl get pods -A > /tmp/test-artifacts/vcluster-pods.txt || true
-          kubectl logs -l app.kubernetes.io/name=testkube-runner -n testkube > /tmp/test-artifacts/testkube-runner-logs.txt || true
-          
-          # Collect nginx deployment status
-          kubectl get all -n nginx > /tmp/test-artifacts/nginx-status.txt || true
-          
-          echo "✅ Artifacts collected"
+          # vCluster status
+          kubectl get all -n nginx > /tmp/artifacts/nginx-status.txt 2>/dev/null || true
+          kubectl get pods -A > /tmp/artifacts/vcluster-pods.txt 2>/dev/null || true
 
-      - name: Upload Test Artifacts
+      - name: Upload Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vcluster-test-results-pr-${{ env.PR_NUMBER }}
-          path: /tmp/test-artifacts/
+          name: test-results-pr-${{ env.PR_NUMBER }}
+          path: /tmp/artifacts/
           retention-days: 30
 
-      # ==================== Cleanup Module ====================
-      - name: Cleanup Testkube Runner
+      - name: Cleanup
         if: always()
         run: |
-          echo "=== Cleaning up Testkube Runner ==="
-          
-          # Delete runner from Testkube Cloud
+          # Cleanup Testkube runner
           testkube delete runner $RUNNER_NAME --delete --uninstall || true
           
-          echo "✅ Testkube runner cleaned up"
-
-      - name: Cleanup ArgoCD Application
-        if: always()
-        run: |
-          echo "=== Cleaning up ArgoCD Application ==="
-          
-          # Switch to host context for ArgoCD operations
-          kubectl config use-context $HOST_CONTEXT || true
-          
-          # Login to ArgoCD
-          argocd login "$ARGOCD_SERVER" --username admin --password "$ARGOCD_PASSWORD" --insecure || true
-          
-          # Delete ArgoCD application
-          kubectl delete application nginx-vcluster-pr-$PR_NUMBER -n argocd --ignore-not-found=true || true
-          
-          # Remove cluster from ArgoCD
+          # Cleanup ArgoCD app
+          kubectl port-forward svc/argocd-server -n argocd 8080:443 &
+          ARGOCD_PID=$!
+          sleep 10
+          argocd login localhost:8080 --username admin --password "$ARGOCD_PASSWORD" --insecure || true
+          kubectl delete application nginx-vcluster-pr-$PR_NUMBER -n argocd --ignore-not-found=true
           argocd cluster rm "vcluster-pr-$PR_NUMBER" --yes || true
+          kill $ARGOCD_PID || true
           
-          echo "✅ ArgoCD resources cleaned up"
-
-      - name: Cleanup vCluster
-        if: always()
-        run: |
-          echo "=== Cleaning up vCluster ==="
-          
-          # Kill all port-forward and vCluster processes
-          kill $VCLUSTER_PID $ARGOCD_PORT_FORWARD_PID 2>/dev/null || true
-          pkill -f "kubectl port-forward" || true
+          # Cleanup vCluster
+          kill $VCLUSTER_PID || true
           pkill -f "vcluster connect" || true
-          
-          # Switch back to host context
           kubectl config use-context $HOST_CONTEXT || true
-          
-          # Disconnect vCluster
-          vcluster disconnect || true
-          
-          # Delete vCluster and namespace
-          vcluster delete testkube-vcluster-$PR_NUMBER --namespace demo-$PR_NUMBER || true
-          kubectl delete namespace demo-$PR_NUMBER --ignore-not-found=true || true
-          
-          echo "✅ vCluster cleanup completed"
-
-      - name: Report Test Results
-        if: always()
-        run: |
-          echo "=== Test Execution Summary ==="
-          echo "Chainsaw Test: ${{ steps.run-chainsaw-tests.outcome }}"
-          echo "k6 Test: ${{ steps.run-k6-tests.outcome }}"
-          
-          if [[ "${{ steps.run-chainsaw-tests.outcome }}" == "failure" || "${{ steps.run-k6-tests.outcome }}" == "failure" ]]; then
-            echo "❌ Some tests failed!"
-            echo "Check test artifacts and Testkube Cloud dashboard for details"
-            echo "Environment: ${{ secrets.TESTKUBE_ENV_ID }}"
-            echo "Runner: $RUNNER_NAME"
-            exit 1
-          else
-            echo "✅ All tests passed!"
-          fi
+          vcluster delete $VCLUSTER_NAME --namespace $NAMESPACE || true
+          kubectl delete namespace $NAMESPACE --ignore-not-found=true
