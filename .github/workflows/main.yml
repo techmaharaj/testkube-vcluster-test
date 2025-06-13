@@ -516,6 +516,20 @@ jobs:
               --tag pr=PR-$PR_NUMBER \
               --tag cluster=demo-$PR_NUMBER \
               --tag demo=gitopscon-isolated
+        
+            echo "=== Running Chainsaw Tests in vCluster with Testkube ==="
+            echo "=== Running test with target runner: $RUNNER_NAME ==="
+  
+            # Run the test workflow to validate the Nginx deployment using chainsaw
+            testkube run testworkflow chainsaw-nginx -f \
+              --target name=$RUNNER_NAME \
+              --tag runner=$RUNNER_NAME \
+              --tag environment=vcluster \
+              --tag test-type=chainsaw \
+              --tag pr=PR-$PR_NUMBER \
+              --tag cluster=demo-$PR_NUMBER \
+              --tag demo=gitopscon-isolated
+
 
       # ==================== Log Collection and Artifacts ====================
       - name: Collect Test Results and Logs
