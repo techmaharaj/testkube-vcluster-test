@@ -516,7 +516,50 @@ jobs:
               --tag pr=PR-$PR_NUMBER \
               --tag cluster=demo-$PR_NUMBER \
               --tag demo=gitopscon-isolated
-        
+
+            # Get the current runner name and extract service account pattern
+            echo "=== Setting up dynamic service account ==="
+            RUNNER_SA="exec-sa-testkube-$RUNNER_NAME"
+            echo "Current runner service account: $RUNNER_SA"
+            
+            cat > /tmp/chainsaw-rbac-dynamic.yaml << EOF
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRole
+            metadata:
+              name: testkube-chainsaw-access
+            rules:
+            - apiGroups: [""]
+              resources: ["namespaces", "pods", "services", "configmaps", "secrets"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["apps"] 
+              resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["argoproj.io"]
+              resources: ["applications"]
+              verbs: ["get", "list", "watch"]
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRoleBinding
+            metadata:
+              name: testkube-chainsaw-access
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: ClusterRole
+              name: testkube-chainsaw-access
+            subjects:
+            - kind: ServiceAccount
+              name: $RUNNER_SA
+              namespace: testkube
+            EOF
+            
+            # Apply the RBAC
+            kubectl apply -f /tmp/chainsaw-rbac-dynamic.yaml
+            
+            echo "✅ Dynamic RBAC applied for current runner:"
+            echo "   - Service Account: $RUNNER_SA"
+            echo "   - Permissions: Basic read access to resources chainsaw needs"
+            echo "   - Should work for this specific PR"
+
             echo "=== Running Chainsaw Tests in vCluster with Testkube ==="
             echo "=== Running test with target runner: $RUNNER_NAME ==="
   
