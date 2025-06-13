@@ -1,10 +1,9 @@
-apiVersion: chainsaw.kyverno.io/v1alpha1
-kind: Test
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: assert-argocd-deployment
-spec:
+  name: nginx-deployment
   namespace: nginx
-  steps:
-  - try:
-    - assert:
-        file: assert-deployment.yaml
+spec:
+  replicas: 2
+status:
+  availableReplicas: 2
