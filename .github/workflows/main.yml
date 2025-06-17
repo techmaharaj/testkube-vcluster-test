@@ -294,7 +294,7 @@ jobs:
           # Sync the application
           argocd app sync nginx-vcluster-pr-$PR_NUMBER --force --timeout 300
           
-          echo "✅ ArgoCD to vCluster configuration completed"
+          echo "✅ Application synced to ephemeral vCluster"
 
       - name: Verify nginx Deployment in vCluster
         run: |
@@ -577,7 +577,7 @@ jobs:
 
 
       # ==================== Log Collection and Artifacts ====================
-      - name: Collect Test Results and Logs
+      - name: Collect vCluster logs
         if: always()
         run: |
           echo "=== Collecting Test Results and Logs ==="
@@ -585,11 +585,11 @@ jobs:
           # Create artifacts directory
           mkdir -p /tmp/test-artifacts
           
-          # Get recent test executions for our runner
+          # Get logs for recent test executions for our runner
           echo "Recent test executions:" > /tmp/test-artifacts/test-summary.txt
           testkube get testworkflowexecutions --limit 10 >> /tmp/test-artifacts/test-summary.txt
           
-          # Collect vCluster pod logs
+          # Collect vCluster logs
           echo "Collecting vCluster pod logs..."
           kubectl config use-context $VCLUSTER_CONTEXT || true
           kubectl get pods -A > /tmp/test-artifacts/vcluster-pods.txt || true
