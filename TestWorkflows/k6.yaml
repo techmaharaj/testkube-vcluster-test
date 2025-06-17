@@ -1,0 +1,26 @@
+kind: TestWorkflow
+apiVersion: testworkflows.testkube.io/v1
+metadata:
+ name: k6-sample
+ namespace: testkube
+ labels:
+   docs: example
+spec:
+ content:
+   git:
+     uri: https://github.com/techmaharaj/testkube-vcluster-test.git
+ steps:
+ - name: Run Tests
+   workingDir: /data
+   run:
+     image: grafana/k6:0.49.0
+     env:
+     - name: K6_WEB_DASHBOARD
+       value: "true"
+     - name: K6_WEB_DASHBOARD_EXPORT
+       value: k6-test-report.html
+     shell: k6 run /data/repo/test/k6/k6-sample.js --vus 100 --duration 10s
+   artifacts:
+     paths:
+     - k6-test-report.html
+status: {}
