@@ -1,0 +1,22 @@
+kind: TestWorkflow
+apiVersion: testworkflows.testkube.io/v1
+metadata:
+ name: chainsaw-nginx
+ namespace: testkube
+spec:
+ content:
+   git:
+     uri: https://github.com/techmaharaj/testkube-vcluster-test.git
+     paths:
+     - test/chainsaw
+ steps:
+ - name: Test ArgoCD deployment
+   workingDir: /data
+   run:
+     image: ghcr.io/kyverno/chainsaw:latest
+     shell: |
+       chainsaw test --report-format XML --report-path /data/repo --report-name chainsaw-report /data/repo/test/chainsaw
+   artifacts:
+     paths:
+     - /data/repo/chainsaw-report.xml
+status: {}
