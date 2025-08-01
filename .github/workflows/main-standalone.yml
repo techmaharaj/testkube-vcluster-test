@@ -432,14 +432,7 @@ jobs:
           helm repo update
           
           echo "=== Installing Testkube agent ==="
-          helm install testkube testkube/testkube \
-            --namespace testkube \
-            --create-namespace \
-            --set testkube-api.minio.enabled=false \
-            --set mongodb.enabled=false \
-            --set testkube-dashboard.enabled=false \
-            --wait \
-            --timeout=600s
+          helm upgrade --install --create-namespace --namespace testkube testkube kubeshop/testkube‍
           
           # Wait for testkube-api-server to be ready
           echo "=== Waiting for Testkube API server ==="
