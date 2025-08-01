@@ -410,39 +410,6 @@ jobs:
           kubectl create namespace testkube --dry-run=client -o yaml | kubectl apply -f -
           
           echo "✅ Proceeding with context: $CURRENT_CONTEXT"
-      
-      - name: Install Testkube Agent in vCluster
-        run: |
-          echo "=== Installing Testkube Agent in vCluster ==="
-          
-          # Ensure we're connected to vCluster
-          CURRENT_CONTEXT=$(kubectl config current-context)
-          echo "Current context: $CURRENT_CONTEXT"
-          
-          # Verify we're in vCluster
-          NAMESPACE_COUNT=$(kubectl get namespaces --no-headers | wc -l)
-          echo "Namespace count: $NAMESPACE_COUNT"
-          
-          # Create testkube namespace
-          kubectl create namespace testkube --dry-run=client -o yaml | kubectl apply -f -
-          
-          # Install Testkube agent (standalone mode)
-          echo "=== Adding Testkube Helm repo ==="
-          helm repo add kubeshop https://kubeshop.github.io/helm-charts
-          helm repo update
-          
-          echo "=== Installing Testkube agent ==="
-          helm upgrade --install --create-namespace --namespace testkube testkube kubeshop/testkube‍
-          
-          # Wait for testkube-api-server to be ready
-          echo "=== Waiting for Testkube API server ==="
-          kubectl wait --for=condition=available deployment/testkube-api-server -n testkube --timeout=300s
-          
-          # Verify installation
-          kubectl get pods -n testkube
-          kubectl get svc -n testkube
-          
-          echo "✅ Testkube agent installed successfully in vCluster"
 
       # ==================== Test Execution in vCluster ====================
       - name: Create and run Test Workflow
