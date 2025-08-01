@@ -414,7 +414,6 @@ jobs:
       - name: Install Testkube Agent in vCluster
         run: |
           echo "=== Installing Testkube Agent in vCluster ==="
-          kubectl create namespace testkube
           kubectl get ns
           testkube init
           
