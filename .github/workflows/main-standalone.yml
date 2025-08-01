@@ -428,7 +428,7 @@ jobs:
           
           # Install Testkube agent (standalone mode)
           echo "=== Adding Testkube Helm repo ==="
-          helm repo add testkube https://kubeshop.github.io/helm-charts
+          helm repo add kubeshop https://kubeshop.github.io/helm-charts
           helm repo update
           
           echo "=== Installing Testkube agent ==="
