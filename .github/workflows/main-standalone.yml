@@ -410,6 +410,21 @@ jobs:
           kubectl create namespace testkube --dry-run=client -o yaml | kubectl apply -f -
           
           echo "✅ Proceeding with context: $CURRENT_CONTEXT"
+        
+      - name: Install Testkube Agent in vCluster
+        run: |
+          echo "=== Installing Testkube Agent in vCluster ==="
+          testkube init
+          
+          # Wait for testkube-api-server to be ready
+          echo "=== Waiting for Testkube API server ==="
+          kubectl wait --for=condition=available deployment/testkube-api-server -n testkube --timeout=300s
+          
+          # Verify installation
+          kubectl get pods -n testkube
+          kubectl get svc -n testkube
+          
+          echo "✅ Testkube agent installed successfully in vCluster"
 
       # ==================== Test Execution in vCluster ====================
       - name: Create and run Test Workflow
