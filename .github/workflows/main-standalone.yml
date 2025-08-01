@@ -414,9 +414,9 @@ jobs:
       - name: Install Testkube Agent in vCluster
         run: |
           echo "=== Installing Testkube Agent in vCluster ==="
-          helm repo add kubeshop https://kubeshop.github.io/helm-charts
-          helm repo update
-          helm upgrade --install --create-namespace --namespace testkube oci://registry-1.docker.io/kubeshop/testkube --version 2.0.17
+          kubectl create namespace testkube
+          kubectl get ns
+          testkube init
           
           # Wait for testkube-api-server to be ready
           echo "=== Waiting for Testkube API server ==="
